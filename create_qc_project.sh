@@ -41,59 +41,95 @@ EOF
 # Snakefile
 cat > "${PROJECT}/workflow/Snakefile" << 'EOF'
 # Snakefile for the quality control pipeline
+
 import glob
 import os
+import re
 
 configfile: "workflow/config.yaml"
 
-# Main pipeline configuration.
+# ---------------------------------------------------------------------
+# Main configuration
+# ---------------------------------------------------------------------
+
 READS_DIR = config["reads_dir"]
 OUTDIR = config["outdir"]
-PE_NAMING = config.get("pe_naming", "auto")  # auto | R1 | 1
 
-# Extensiones válidas
+# auto | R1 | 1
+PE_NAMING = config.get("pe_naming", "auto")
+
+# Valid FASTQ extensions
 FASTQ_EXTENSIONS = ["fastq.gz", "fq.gz"]
 
+
+# ---------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------
+
 def find_files(patterns):
+
     files = []
+
     for p in patterns:
         files.extend(glob.glob(p))
+
     return sorted(files)
 
-# Automatically detects the PE read naming scheme:
-# - R1/R2: sample_R1*.fastq.gz and sample_R2*.fastq.gz
-# - 1/2:   sample_1.fastq.gz and sample_2.fastq.gz
+
+# Automatically detects PE naming:
+#
+# R1/R2:
+#   sample_R1.fastq.gz
+#   sample_R2.fastq.gz
+#
+# 1/2:
+#   sample_1.fastq.gz
+#   sample_2.fastq.gz
+#
 def detect_mode():
+
     r1_patterns = [
-        os.path.join(READS_DIR, f"*_R1*.{ext}")
+        os.path.join(
+            READS_DIR,
+            f"*_R1*.{ext}"
+        )
         for ext in FASTQ_EXTENSIONS
     ]
+
     one_patterns = [
-        os.path.join(READS_DIR, f"*_1.{ext}")
+        os.path.join(
+            READS_DIR,
+            f"*_1.{ext}"
+        )
         for ext in FASTQ_EXTENSIONS
     ]
-    
+
     r1_files = find_files(r1_patterns)
     one_files = find_files(one_patterns)
-    
+
     if r1_files:
         return "R1"
+
     if one_files:
         return "1"
 
     raise ValueError(
-        f"No PE files found in {READS_DIR}"
+        f"No PE files detected in {READS_DIR}"
     )
 
 
-# Final naming mode defined by config or auto-detection.
+# Final mode
 MODE = detect_mode() if PE_NAMING == "auto" else PE_NAMING
+
 if MODE not in {"R1", "1"}:
-    raise ValueError("pe_naming must be: auto | R1 | 1")
+    raise ValueError(
+        "pe_naming must be: auto | R1 | 1"
+    )
 
 
-# Returns FASTQ path for a sample/mate based on active mode.
+# Returns FASTQ path for sample/mate
 def fq_path(sample, mate):
+
     if MODE == "1":
 
         patterns = [
@@ -115,15 +151,24 @@ def fq_path(sample, mate):
         ]
 
     hits = find_files(patterns)
+
     if not hits:
-        raise ValueError(f"Could not find {pattern}")
+        raise ValueError(
+            f"Could not find FASTQ for {sample} mate {mate}"
+        )
+
     if len(hits) > 1:
-        print(f"[WARN] {sample} mate {mate}: multiple matches, using: {hits[0]}")
+        print(
+            f"[WARN] {sample} mate {mate}: "
+            f"multiple matches found, using {hits[0]}"
+        )
+
     return hits[0]
 
 
-# Lists valid samples with complete PE pairs (R1/R2 or 1/2).
+# Detects valid paired-end samples
 def list_samples():
+
     samples = set()
 
     if MODE == "R1":
@@ -131,15 +176,21 @@ def list_samples():
         for ext in FASTQ_EXTENSIONS:
 
             files = glob.glob(
-                os.path.join(READS_DIR, f"*_R1*.{ext}")
+                os.path.join(
+                    READS_DIR,
+                    f"*_R1*.{ext}"
+                )
             )
 
             for f in files:
 
                 base = os.path.basename(f)
 
-                # elimina desde _R1...
-                sample = re.sub(r"_R1.*", "", base)
+                sample = re.sub(
+                    r"_R1.*",
+                    "",
+                    base
+                )
 
                 r2_exists = False
 
@@ -162,14 +213,21 @@ def list_samples():
         for ext in FASTQ_EXTENSIONS:
 
             files = glob.glob(
-                os.path.join(READS_DIR, f"*_1.{ext}")
+                os.path.join(
+                    READS_DIR,
+                    f"*_1.{ext}"
+                )
             )
 
             for f in files:
 
                 base = os.path.basename(f)
 
-                sample = re.sub(r"_1.*", "", base)
+                sample = re.sub(
+                    r"_1.*",
+                    "",
+                    base
+                )
 
                 r2 = os.path.join(
                     READS_DIR,
@@ -180,139 +238,315 @@ def list_samples():
                     samples.add(sample)
 
     if not samples:
+
         raise ValueError(
-            f"No valid PE pairs detected in {READS_DIR} (mode {MODE})"
+            f"No valid PE pairs detected "
+            f"in {READS_DIR} (mode {MODE})"
         )
 
     return sorted(samples)
 
 
-# Builds output prefix per sample/mate for FastQC reuse.
+# Output naming helper
 def out_prefix(sample, mate):
-    return f"{sample}_{mate}" if MODE == "1" else f"{sample}_R{mate}"
 
-
-# Path to cleaned FASTQ produced by fastp (_clean suffix).
-def clean_path(sample, mate):
     if MODE == "1":
-        return os.path.join(OUTDIR, "clean", f"{sample}_{mate}_clean.fastq.gz")
-    return os.path.join(OUTDIR, "clean", f"{sample}_R{mate}_clean.fastq.gz")
+        return f"{sample}_{mate}"
 
+    return f"{sample}_R{mate}"
+
+
+# Clean FASTQ path
+def clean_path(sample, mate):
+
+    if MODE == "1":
+
+        return os.path.join(
+            OUTDIR,
+            "clean",
+            f"{sample}_{mate}_clean.fastq.gz"
+        )
+
+    return os.path.join(
+        OUTDIR,
+        "clean",
+        f"{sample}_R{mate}_clean.fastq.gz"
+    )
+
+
+# ---------------------------------------------------------------------
+# Samples
+# ---------------------------------------------------------------------
 
 SAMPLES = list_samples()
-print(f"[INFO] Detected PE mode: {MODE}. Samples: {len(SAMPLES)}")
 
-FASTQC_PRE_ZIPS = expand(
-    os.path.join(OUTDIR, "fastqc", "pre", "{p}_fastqc.zip"),
-    p=[out_prefix(s, 1) for s in SAMPLES] + [out_prefix(s, 2) for s in SAMPLES],
+print(
+    f"[INFO] Detected PE mode: {MODE}. "
+    f"Samples detected: {len(SAMPLES)}"
 )
 
-FASTQC_POST_ZIPS = expand(
-    os.path.join(OUTDIR, "fastqc", "post", "{p}_fastqc.zip"),
-    p=[f"{out_prefix(s, 1)}_clean" for s in SAMPLES]
-    + [f"{out_prefix(s, 2)}_clean" for s in SAMPLES],
+
+# ---------------------------------------------------------------------
+# Global outputs
+# ---------------------------------------------------------------------
+
+fastqc_pre_outputs = expand(
+    os.path.join(
+        OUTDIR,
+        "fastqc",
+        "pre",
+        "{sample}_R{mate}_fastqc.zip"
+    ),
+    sample=SAMPLES,
+    mate=[1, 2]
 )
 
-FASTP_JSON = expand(os.path.join(OUTDIR, "fastp", "{sample}.json"), sample=SAMPLES)
+fastqc_post_outputs = expand(
+    os.path.join(
+        OUTDIR,
+        "fastqc",
+        "post",
+        "{sample}_R{mate}_clean_fastqc.zip"
+    ),
+    sample=SAMPLES,
+    mate=[1, 2]
+)
+
+FASTP_JSON = expand(
+    os.path.join(
+        OUTDIR,
+        "fastp",
+        "{sample}.json"
+    ),
+    sample=SAMPLES
+)
 
 
-# Target rule: defines all expected final outputs.
+# ---------------------------------------------------------------------
+# Final targets
+# ---------------------------------------------------------------------
+
 rule all:
     input:
-        os.path.join(OUTDIR, "multiqc", "pre", "multiqc_report.html"),
-        os.path.join(OUTDIR, "multiqc", "post", "multiqc_report.html"),
-        expand(clean_path("{sample}", 1), sample=SAMPLES),
-        expand(clean_path("{sample}", 2), sample=SAMPLES)
+        os.path.join(
+            OUTDIR,
+            "multiqc",
+            "pre",
+            "multiqc_report.html"
+        ),
+        os.path.join(
+            OUTDIR,
+            "multiqc",
+            "post",
+            "multiqc_report.html"
+        ),
+        expand(
+            clean_path("{sample}", 1),
+            sample=SAMPLES
+        ),
+        expand(
+            clean_path("{sample}", 2),
+            sample=SAMPLES
+        )
 
 
-# Runs FastQC on raw reads (R1 and R2) per sample.
+# ---------------------------------------------------------------------
+# FASTQC BEFORE CLEANING
+# ---------------------------------------------------------------------
+
 rule fastqc_pre:
     input:
         r1=lambda wc: fq_path(wc.sample, 1),
         r2=lambda wc: fq_path(wc.sample, 2)
+
     output:
-        html1=os.path.join(OUTDIR, "fastqc", "pre", f"{out_prefix('{sample}', 1)}_fastqc.html"),
-        zip1=os.path.join(OUTDIR, "fastqc", "pre", f"{out_prefix('{sample}', 1)}_fastqc.zip"),
-        html2=os.path.join(OUTDIR, "fastqc", "pre", f"{out_prefix('{sample}', 2)}_fastqc.html"),
-        zip2=os.path.join(OUTDIR, "fastqc", "pre", f"{out_prefix('{sample}', 2)}_fastqc.zip")
+        html1=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "pre",
+            "{sample}_R1_fastqc.html"
+        ),
+        zip1=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "pre",
+            "{sample}_R1_fastqc.zip"
+        ),
+        html2=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "pre",
+            "{sample}_R2_fastqc.html"
+        ),
+        zip2=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "pre",
+            "{sample}_R2_fastqc.zip"
+        )
+
     threads: 2
+
     shell:
         r"""
         mkdir -p {OUTDIR}/fastqc/pre
-        fastqc -t {threads} -o {OUTDIR}/fastqc/pre {input.r1} {input.r2}
+
+        fastqc \
+            -t {threads} \
+            -o {OUTDIR}/fastqc/pre \
+            {input.r1} \
+            {input.r2}
         """
 
 
-# Consolidates pre-cleaning FastQC reports into MultiQC.
+# ---------------------------------------------------------------------
+# MULTIQC BEFORE CLEANING
+# ---------------------------------------------------------------------
+
 rule multiqc_pre:
     input:
-        FASTQC_PRE_ZIPS
+        fastqc_pre_outputs
+
     output:
-        report=os.path.join(OUTDIR, "multiqc", "pre", "multiqc_report.html")
+        html=os.path.join(
+            OUTDIR,
+            "multiqc",
+            "pre",
+            "multiqc_report.html"
+        )
+
     shell:
         r"""
         mkdir -p {OUTDIR}/multiqc/pre
-        multiqc -o {OUTDIR}/multiqc/pre {OUTDIR}/fastqc/pre
+
+        multiqc \
+            {OUTDIR}/fastqc/pre \
+            -o {OUTDIR}/multiqc/pre
         """
 
 
-# Runs PE trimming/filtering with fastp and generates HTML/JSON reports.
+# ---------------------------------------------------------------------
+# FASTP
+# ---------------------------------------------------------------------
+
 rule fastp:
     input:
         r1=lambda wc: fq_path(wc.sample, 1),
         r2=lambda wc: fq_path(wc.sample, 2)
+
     output:
         o1=clean_path("{sample}", 1),
         o2=clean_path("{sample}", 2),
-        html=os.path.join(OUTDIR, "fastp", "{sample}.html"),
-        json=os.path.join(OUTDIR, "fastp", "{sample}.json")
+        html=os.path.join(
+            OUTDIR,
+            "fastp",
+            "{sample}.html"
+        ),
+        json=os.path.join(
+            OUTDIR,
+            "fastp",
+            "{sample}.json"
+        )
+
     params:
         q=config["fastp"]["qualified_quality_phred"],
         min_len=config["fastp"]["length_required"]
+
     threads: config["fastp"]["thread"]
+
     shell:
         r"""
-        mkdir -p {OUTDIR}/clean {OUTDIR}/fastp
+        mkdir -p {OUTDIR}/clean
+        mkdir -p {OUTDIR}/fastp
+
         fastp \
-          -i {input.r1} -I {input.r2} \
-          -o {output.o1} -O {output.o2} \
-          --qualified_quality_phred {params.q} \
-          --length_required {params.min_len} \
-          --detect_adapter_for_pe \
-          -w {threads} \
-          -h {output.html} -j {output.json}
+            -i {input.r1} \
+            -I {input.r2} \
+            -o {output.o1} \
+            -O {output.o2} \
+            --qualified_quality_phred {params.q} \
+            --length_required {params.min_len} \
+            --detect_adapter_for_pe \
+            -w {threads} \
+            -h {output.html} \
+            -j {output.json}
         """
 
 
-# Runs FastQC on cleaned reads produced by fastp.
+# ---------------------------------------------------------------------
+# FASTQC AFTER CLEANING
+# ---------------------------------------------------------------------
+
 rule fastqc_post:
     input:
         r1=lambda wc: clean_path(wc.sample, 1),
         r2=lambda wc: clean_path(wc.sample, 2)
+
     output:
-        # FastQC uses the input filename as base, so the _clean suffix appears.
-        html1=os.path.join(OUTDIR, "fastqc", "post", f"{out_prefix('{sample}', 1)}_clean_fastqc.html"),
-        zip1=os.path.join(OUTDIR, "fastqc", "post", f"{out_prefix('{sample}', 1)}_clean_fastqc.zip"),
-        html2=os.path.join(OUTDIR, "fastqc", "post", f"{out_prefix('{sample}', 2)}_clean_fastqc.html"),
-        zip2=os.path.join(OUTDIR, "fastqc", "post", f"{out_prefix('{sample}', 2)}_clean_fastqc.zip")
+        html1=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "post",
+            "{sample}_R1_clean_fastqc.html"
+        ),
+        zip1=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "post",
+            "{sample}_R1_clean_fastqc.zip"
+        ),
+        html2=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "post",
+            "{sample}_R2_clean_fastqc.html"
+        ),
+        zip2=os.path.join(
+            OUTDIR,
+            "fastqc",
+            "post",
+            "{sample}_R2_clean_fastqc.zip"
+        )
+
     threads: 2
+
     shell:
         r"""
         mkdir -p {OUTDIR}/fastqc/post
-        fastqc -t {threads} -o {OUTDIR}/fastqc/post {input.r1} {input.r2}
+
+        fastqc \
+            -t {threads} \
+            -o {OUTDIR}/fastqc/post \
+            {input.r1} \
+            {input.r2}
         """
 
 
-# Consolidates post-cleaning FastQC + fastp metrics into final MultiQC.
+# ---------------------------------------------------------------------
+# MULTIQC AFTER CLEANING
+# ---------------------------------------------------------------------
+
 rule multiqc_post:
     input:
-        FASTQC_POST_ZIPS + FASTP_JSON
+        fastqc_post_outputs,
+        FASTP_JSON
+
     output:
-        report=os.path.join(OUTDIR, "multiqc", "post", "multiqc_report.html")
+        html=os.path.join(
+            OUTDIR,
+            "multiqc",
+            "post",
+            "multiqc_report.html"
+        )
+
     shell:
         r"""
         mkdir -p {OUTDIR}/multiqc/post
-        multiqc -o {OUTDIR}/multiqc/post {OUTDIR}/fastqc/post {OUTDIR}/fastp
+
+        multiqc \
+            {OUTDIR}/fastqc/post \
+            {OUTDIR}/fastp \
+            -o {OUTDIR}/multiqc/post
         """
 EOF
 
