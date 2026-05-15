@@ -51,21 +51,38 @@ READS_DIR = config["reads_dir"]
 OUTDIR = config["outdir"]
 PE_NAMING = config.get("pe_naming", "auto")  # auto | R1 | 1
 
+# Extensiones válidas
+FASTQ_EXTENSIONS = ["fastq.gz", "fq.gz"]
+
+def find_files(patterns):
+    files = []
+    for p in patterns:
+        files.extend(glob.glob(p))
+    return sorted(files)
 
 # Automatically detects the PE read naming scheme:
 # - R1/R2: sample_R1*.fastq.gz and sample_R2*.fastq.gz
 # - 1/2:   sample_1.fastq.gz and sample_2.fastq.gz
 def detect_mode():
-    r1_files = glob.glob(os.path.join(READS_DIR, "*_R1*.fastq.gz"))
-    one_files = glob.glob(os.path.join(READS_DIR, "*_1.fastq.gz"))
-
+    r1_patterns = [
+        os.path.join(READS_DIR, f"*_R1*.{ext}")
+        for ext in FASTQ_EXTENSIONS
+    ]
+    one_patterns = [
+        os.path.join(READS_DIR, f"*_1.{ext}")
+        for ext in FASTQ_EXTENSIONS
+    ]
+    
+    r1_files = find_files(r1_patterns)
+    one_files = find_files(one_patterns)
+    
     if r1_files:
         return "R1"
     if one_files:
         return "1"
 
     raise ValueError(
-        f"No PE files found with *_R1*.fastq.gz or *_1.fastq.gz in {READS_DIR}"
+        f"No PE files found in {READS_DIR}"
     )
 
 
@@ -78,10 +95,26 @@ if MODE not in {"R1", "1"}:
 # Returns FASTQ path for a sample/mate based on active mode.
 def fq_path(sample, mate):
     if MODE == "1":
-        return os.path.join(READS_DIR, f"{sample}_{mate}.fastq.gz")
 
-    pattern = os.path.join(READS_DIR, f"{sample}_R{mate}*.fastq.gz")
-    hits = sorted(glob.glob(pattern))
+        patterns = [
+            os.path.join(
+                READS_DIR,
+                f"{sample}_{mate}.{ext}"
+            )
+            for ext in FASTQ_EXTENSIONS
+        ]
+
+    else:
+
+        patterns = [
+            os.path.join(
+                READS_DIR,
+                f"{sample}_R{mate}*.{ext}"
+            )
+            for ext in FASTQ_EXTENSIONS
+        ]
+
+    hits = find_files(patterns)
     if not hits:
         raise ValueError(f"Could not find {pattern}")
     if len(hits) > 1:
@@ -93,27 +126,65 @@ def fq_path(sample, mate):
 def list_samples():
     samples = set()
 
-    if MODE == "1":
-        for r1 in glob.glob(os.path.join(READS_DIR, "*_1.fastq.gz")):
-            base = os.path.basename(r1)
-            sample = base[: -len("_1.fastq.gz")]
-            r2 = os.path.join(READS_DIR, f"{sample}_2.fastq.gz")
-            if os.path.exists(r2):
-                samples.add(sample)
-    else:
-        for r1 in glob.glob(os.path.join(READS_DIR, "*_R1*.fastq.gz")):
-            base = os.path.basename(r1)
-            sample = base.split("_R1")[0]
-            r2 = os.path.join(READS_DIR, base.replace("_R1", "_R2", 1))
-            if os.path.exists(r2):
-                samples.add(sample)
+    if MODE == "R1":
 
-    samples = sorted(samples)
+        for ext in FASTQ_EXTENSIONS:
+
+            files = glob.glob(
+                os.path.join(READS_DIR, f"*_R1*.{ext}")
+            )
+
+            for f in files:
+
+                base = os.path.basename(f)
+
+                # elimina desde _R1...
+                sample = re.sub(r"_R1.*", "", base)
+
+                r2_exists = False
+
+                for ext2 in FASTQ_EXTENSIONS:
+
+                    r2_pattern = os.path.join(
+                        READS_DIR,
+                        f"{sample}_R2*.{ext2}"
+                    )
+
+                    if glob.glob(r2_pattern):
+                        r2_exists = True
+                        break
+
+                if r2_exists:
+                    samples.add(sample)
+
+    else:
+
+        for ext in FASTQ_EXTENSIONS:
+
+            files = glob.glob(
+                os.path.join(READS_DIR, f"*_1.{ext}")
+            )
+
+            for f in files:
+
+                base = os.path.basename(f)
+
+                sample = re.sub(r"_1.*", "", base)
+
+                r2 = os.path.join(
+                    READS_DIR,
+                    f"{sample}_2.{ext}"
+                )
+
+                if os.path.exists(r2):
+                    samples.add(sample)
+
     if not samples:
         raise ValueError(
             f"No valid PE pairs detected in {READS_DIR} (mode {MODE})"
         )
-    return samples
+
+    return sorted(samples)
 
 
 # Builds output prefix per sample/mate for FastQC reuse.
