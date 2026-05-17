@@ -573,6 +573,3 @@ echo "🚀 Next steps:"
 echo "1) Copy your FASTQ files to: ${PROJECT}/data/fastq/"
 echo "2) Activate the environment: conda activate qc-pipe"
 echo "3) Run the pipeline: snakemake -j 8 -s workflow/Snakefile --scheduler greedy"
-
-
-
